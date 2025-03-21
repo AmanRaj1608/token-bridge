@@ -1,0 +1,296 @@
+{
+  "address": "41Kus9DQ9gaxTjMVsjUvoh2z9v2EY3fYdo7zWwW5Rssg",
+  "metadata": {
+    "name": "spl20",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
+  "instructions": [
+    {
+      "name": "burn",
+      "discriminator": [
+        116,
+        110,
+        29,
+        56,
+        107,
+        219,
+        42,
+        93
+      ],
+      "accounts": [
+        {
+          "name": "token_mint",
+          "writable": true
+        },
+        {
+          "name": "token_account",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "create_account",
+      "discriminator": [
+        99,
+        20,
+        130,
+        119,
+        196,
+        235,
+        131,
+        149
+      ],
+      "accounts": [
+        {
+          "name": "token_mint"
+        },
+        {
+          "name": "token_account",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "token_mint",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "symbol",
+          "type": "string"
+        },
+        {
+          "name": "decimals",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "mint",
+      "discriminator": [
+        51,
+        57,
+        225,
+        47,
+        182,
+        146,
+        137,
+        166
+      ],
+      "accounts": [
+        {
+          "name": "token_mint",
+          "writable": true
+        },
+        {
+          "name": "token_account",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "transfer",
+      "discriminator": [
+        163,
+        52,
+        200,
+        231,
+        140,
+        3,
+        69,
+        186
+      ],
+      "accounts": [
+        {
+          "name": "from",
+          "writable": true
+        },
+        {
+          "name": "to",
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "TokenAccount",
+      "discriminator": [
+        220,
+        131,
+        236,
+        16,
+        145,
+        206,
+        207,
+        54
+      ]
+    },
+    {
+      "name": "TokenMint",
+      "discriminator": [
+        78,
+        9,
+        173,
+        40,
+        126,
+        105,
+        238,
+        172
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "UnauthorizedMintAuthority",
+      "msg": "Mint authority is invalid"
+    },
+    {
+      "code": 6001,
+      "name": "UnauthorizedTokenHolder",
+      "msg": "Token holder is not authorized"
+    },
+    {
+      "code": 6002,
+      "name": "InsufficientFunds",
+      "msg": "Insufficient funds"
+    },
+    {
+      "code": 6003,
+      "name": "CalculationOverflow",
+      "msg": "Calculation overflow"
+    },
+    {
+      "code": 6004,
+      "name": "InvalidTokenAccount",
+      "msg": "Invalid token account"
+    },
+    {
+      "code": 6005,
+      "name": "MintMismatch",
+      "msg": "Mint mismatch between accounts"
+    }
+  ],
+  "types": [
+    {
+      "name": "TokenAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenMint",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "symbol",
+            "type": "string"
+          },
+          {
+            "name": "decimals",
+            "type": "u8"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "total_supply",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}
