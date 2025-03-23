@@ -5,17 +5,47 @@ import { MongoClient } from "mongodb";
 import { CONFIG } from "./config";
 import * as sepolia from "./chains/sepolia";
 import * as solana from "./chains/solana";
-import { Helius } from "helius-sdk";
 
 const app = express();
 const port = process.env.PORT || 4000;
 
-// Connect to MongoDB
 let db: any;
 const mongoClient = new MongoClient(CONFIG.mongodb.uri);
 
-// Initialize Helius with your API key
-const helius = new Helius(CONFIG.helius.apiKey);
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withRateLimitRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries = 5,
+  initialDelay = 500
+): Promise<T> {
+  let retries = 0;
+  let currentDelay = initialDelay;
+
+  while (true) {
+    try {
+      return await operation();
+    } catch (error: any) {
+      const isRateLimit =
+        error.message?.includes("429") ||
+        error.message?.includes("Too Many Requests") ||
+        error.message?.includes("rate limit");
+
+      if (!isRateLimit || retries >= maxRetries) {
+        throw error;
+      }
+
+      retries++;
+      console.log(
+        `Rate limit hit. Retrying in ${currentDelay}ms (${retries}/${maxRetries})...`
+      );
+      await delay(currentDelay);
+      currentDelay *= 2;
+    }
+  }
+}
 
 async function connectToMongo() {
   try {
@@ -23,7 +53,6 @@ async function connectToMongo() {
     console.log("Connected to MongoDB");
     db = mongoClient.db(CONFIG.mongodb.dbName);
 
-    // Create indexes for performance
     await db
       .collection(CONFIG.mongodb.collections.transfers)
       .createIndex({ status: 1 });
@@ -45,7 +74,6 @@ async function connectToMongo() {
 // Process Ethereum → Solana transfers
 async function processEthToSolanaEvents() {
   try {
-    // Get the latest processed block from the database
     const chainStatusCollection = db.collection(
       CONFIG.mongodb.collections.chainStatus
     );
@@ -57,15 +85,12 @@ async function processEthToSolanaEvents() {
       chain: "ethereum",
     });
 
-    // Get current block number
-    const currentBlock = await sepolia.getBlockNumber();
-
-    // Start from the last processed block + 1, or from a reasonable starting point
+    const currentBlock = await withRateLimitRetry(() =>
+      sepolia.getBlockNumber()
+    );
     const fromBlock = lastProcessed
       ? BigInt(lastProcessed.lastProcessedBlock) + BigInt(1)
       : currentBlock - BigInt(1000);
-
-    // Don't scan more than 1000 blocks at once
     const toBlock = currentBlock - BigInt(CONFIG.sepolia.confirmations);
 
     if (fromBlock > toBlock) {
@@ -77,12 +102,11 @@ async function processEthToSolanaEvents() {
 
     console.log(`Scanning Ethereum blocks from ${fromBlock} to ${toBlock}`);
 
-    // Get burn events from Ethereum
-    const burnEvents = await sepolia.getLatestBurnEvents(fromBlock, toBlock);
+    const burnEvents = await withRateLimitRetry(() =>
+      sepolia.getLatestBurnEvents(fromBlock, toBlock)
+    );
 
-    // Process each event
     for (const event of burnEvents) {
-      // Check if we've already processed this event
       const existingTransaction = await transfersCollection.findOne({
         sourceTransactionHash: event.transactionHash,
       });
@@ -94,7 +118,11 @@ async function processEthToSolanaEvents() {
         continue;
       }
 
-      // Record the pending transfer
+      console.log(`Found new Ethereum burn event: ${event.transactionHash}`);
+      console.log(`  From: ${event.from}`);
+      console.log(`  To: ${event.destinationAddress}`);
+      console.log(`  Amount: ${event.value}`);
+
       await transfersCollection.insertOne({
         sourceChain: "ethereum",
         destinationChain: "solana",
@@ -115,7 +143,6 @@ async function processEthToSolanaEvents() {
       );
     }
 
-    // Update the last processed block
     if (burnEvents.length > 0 || fromBlock < toBlock) {
       await chainStatusCollection.updateOne(
         { chain: "ethereum" },
@@ -127,6 +154,8 @@ async function processEthToSolanaEvents() {
         },
         { upsert: true }
       );
+
+      console.log(`Updated last processed Ethereum block to ${toBlock}`);
     }
   } catch (error) {
     console.error("Error in processEthToSolanaEvents:", error);
@@ -136,7 +165,6 @@ async function processEthToSolanaEvents() {
 // Process Solana → Ethereum transfers
 async function processSolanaToEthEvents() {
   try {
-    // Get the latest processed signature from the database
     const chainStatusCollection = db.collection(
       CONFIG.mongodb.collections.chainStatus
     );
@@ -155,17 +183,23 @@ async function processSolanaToEthEvents() {
       }`
     );
 
-    // Get burn events from Solana
-    const burnEvents = await solana.getLatestBurnEvents(lastSignature);
+    const burnEvents = await withRateLimitRetry(() =>
+      solana.getLatestBurnEvents(lastSignature)
+    );
 
     if (burnEvents.length === 0) {
       console.log("No new Solana burn events to process");
       return;
     }
 
-    // Process each event
+    console.log(`Found ${burnEvents.length} new Solana burn events`);
+
     for (const event of burnEvents) {
-      // Check if we've already processed this event
+      if (event.from === "error" || event.destinationAddress === "error") {
+        console.log(`Skipping invalid event: ${event.signature}`);
+        continue;
+      }
+
       const existingTransaction = await transfersCollection.findOne({
         sourceTransactionHash: event.signature,
       });
@@ -175,7 +209,11 @@ async function processSolanaToEthEvents() {
         continue;
       }
 
-      // Record the pending transfer
+      console.log(`Found new Solana burn event: ${event.signature}`);
+      console.log(`  From: ${event.from}`);
+      console.log(`  To: ${event.destinationAddress}`);
+      console.log(`  Amount: ${event.value}`);
+
       await transfersCollection.insertOne({
         sourceChain: "solana",
         destinationChain: "ethereum",
@@ -196,9 +234,7 @@ async function processSolanaToEthEvents() {
       );
     }
 
-    // Update the last processed signature if we have events
     if (burnEvents.length > 0) {
-      // The first event in the array is the most recent one
       const mostRecentSignature = burnEvents[0].signature;
 
       await chainStatusCollection.updateOne(
@@ -210,6 +246,10 @@ async function processSolanaToEthEvents() {
           },
         },
         { upsert: true }
+      );
+
+      console.log(
+        `Updated last processed Solana signature to ${mostRecentSignature}`
       );
     }
   } catch (error) {
@@ -224,7 +264,6 @@ async function processEthToSolanaPending() {
       CONFIG.mongodb.collections.transfers
     );
 
-    // Get pending transfers
     const pendingTransfers = await transfersCollection
       .find({
         sourceChain: "ethereum",
@@ -244,7 +283,9 @@ async function processEthToSolanaPending() {
 
     for (const transfer of pendingTransfers) {
       try {
-        // Update status to processing
+        console.log(
+          `Processing transfer ${transfer._id} (${transfer.sourceTransactionHash})`
+        );
         await transfersCollection.updateOne(
           { _id: transfer._id },
           {
@@ -255,14 +296,14 @@ async function processEthToSolanaPending() {
           }
         );
 
-        // Mint tokens on Solana
-        const mintResult = await solana.mintTokens({
-          recipientAddress: transfer.destinationAddress,
-          amount: BigInt(transfer.amount),
-          sourceChainTxHash: transfer.sourceTransactionHash,
-        });
+        const mintResult = await withRateLimitRetry(() =>
+          solana.mintTokens({
+            recipientAddress: transfer.destinationAddress,
+            amount: BigInt(transfer.amount),
+            sourceChainTxHash: transfer.sourceTransactionHash,
+          })
+        );
 
-        // Update to completed
         await transfersCollection.updateOne(
           { _id: transfer._id },
           {
@@ -276,7 +317,7 @@ async function processEthToSolanaPending() {
         );
 
         console.log(
-          `Completed Ethereum→Solana transfer: ${transfer.amount} tokens to ${transfer.destinationAddress}`
+          `Completed Ethereum→Solana transfer: ${transfer.amount} tokens to ${transfer.destinationAddress} (tx: ${mintResult})`
         );
       } catch (error) {
         console.error(
@@ -284,7 +325,6 @@ async function processEthToSolanaPending() {
           error
         );
 
-        // Update with error and increment retry count
         await transfersCollection.updateOne(
           { _id: transfer._id },
           {
@@ -311,7 +351,6 @@ async function processSolanaToEthPending() {
       CONFIG.mongodb.collections.transfers
     );
 
-    // Get pending transfers
     const pendingTransfers = await transfersCollection
       .find({
         sourceChain: "solana",
@@ -331,7 +370,9 @@ async function processSolanaToEthPending() {
 
     for (const transfer of pendingTransfers) {
       try {
-        // Update status to processing
+        console.log(
+          `Processing transfer ${transfer._id} (${transfer.sourceTransactionHash})`
+        );
         await transfersCollection.updateOne(
           { _id: transfer._id },
           {
@@ -342,14 +383,14 @@ async function processSolanaToEthPending() {
           }
         );
 
-        // Mint tokens on Ethereum
-        const mintResult = await sepolia.mintTokens({
-          recipientAddress: transfer.destinationAddress,
-          amount: BigInt(transfer.amount),
-          sourceChainTxHash: transfer.sourceTransactionHash,
-        });
+        const mintResult = await withRateLimitRetry(() =>
+          sepolia.mintTokens({
+            recipientAddress: transfer.destinationAddress,
+            amount: BigInt(transfer.amount),
+            sourceChainTxHash: transfer.sourceTransactionHash,
+          })
+        );
 
-        // Update to completed
         await transfersCollection.updateOne(
           { _id: transfer._id },
           {
@@ -363,7 +404,7 @@ async function processSolanaToEthPending() {
         );
 
         console.log(
-          `Completed Solana→Ethereum transfer: ${transfer.amount} tokens to ${transfer.destinationAddress}`
+          `Completed Solana→Ethereum transfer: ${transfer.amount} tokens to ${transfer.destinationAddress} (tx: ${mintResult})`
         );
       } catch (error) {
         console.error(
@@ -371,7 +412,6 @@ async function processSolanaToEthPending() {
           error
         );
 
-        // Update with error and increment retry count
         await transfersCollection.updateOne(
           { _id: transfer._id },
           {
@@ -391,33 +431,25 @@ async function processSolanaToEthPending() {
   }
 }
 
-// Start server and connect to MongoDB
 app.listen(port, async () => {
   console.log(`Server is running on port ${port}`);
   await connectToMongo();
 
-  // Start the bidirectional relayer service
   console.log("Starting bidirectional relayer service...");
 
-  // Event monitoring
   setInterval(processEthToSolanaEvents, CONFIG.polling.interval);
   setInterval(processSolanaToEthEvents, CONFIG.polling.interval);
-
-  // Transfer processing
   setInterval(processEthToSolanaPending, CONFIG.processing.interval);
   setInterval(processSolanaToEthPending, CONFIG.processing.interval);
 
-  // Run immediately on startup
   processEthToSolanaEvents();
   processSolanaToEthEvents();
 });
 
-// Add basic health endpoint
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
-// Add admin API endpoint to get transfer status
 app.get("/api/transfers", async (req, res) => {
   try {
     const { status, sourceChain, limit = 20 } = req.query;
@@ -440,7 +472,6 @@ app.get("/api/transfers", async (req, res) => {
   }
 });
 
-// Handle graceful shutdown
 process.on("SIGINT", async () => {
   console.log("Shutting down...");
   await mongoClient.close();

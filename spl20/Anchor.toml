@@ -6,13 +6,16 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-spl20 = "41Kus9DQ9gaxTjMVsjUvoh2z9v2EY3fYdo7zWwW5Rssg"
+spl20 = "8X3gPhhqv562jvPgK7Yj7VWwSjYjcsxUuedJKcic8Pwf"
+
+[programs.devnet]
+spl20 = "8X3gPhhqv562jvPgK7Yj7VWwSjYjcsxUuedJKcic8Pwf"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

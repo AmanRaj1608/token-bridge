@@ -1,214 +1,321 @@
 use anchor_lang::prelude::*;
+use anchor_spl::associated_token::AssociatedToken;
+use anchor_spl::token::{self, Mint, Token, Transfer};
 
-declare_id!("41Kus9DQ9gaxTjMVsjUvoh2z9v2EY3fYdo7zWwW5Rssg");
+declare_id!("8X3gPhhqv562jvPgK7Yj7VWwSjYjcsxUuedJKcic8Pwf");
 
 #[program]
 pub mod spl20 {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>, name: String, symbol: String, decimals: u8) -> Result<()> {
-        let token_mint = &mut ctx.accounts.token_mint;
-        let authority = &ctx.accounts.authority;
+    pub fn initialize_bridge(ctx: Context<InitializeBridge>, token_mint: Pubkey) -> Result<()> {
+        let bridge = &mut ctx.accounts.bridge;
+        bridge.authority = ctx.accounts.authority.key();
+        bridge.token_mint = token_mint;
 
-        token_mint.name = name;
-        token_mint.symbol = symbol;
-        token_mint.decimals = decimals;
-        token_mint.authority = authority.key();
-        token_mint.total_supply = 0;
-
-        msg!("SPL20 Token initialized: {}", token_mint.symbol);
         Ok(())
     }
 
-    pub fn create_account(ctx: Context<CreateAccount>) -> Result<()> {
-        let token_account = &mut ctx.accounts.token_account;
-        let owner = &ctx.accounts.owner;
-        let token_mint = &ctx.accounts.token_mint;
+    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        // Transfer tokens from user to bridge
+        let transfer_instruction = Transfer {
+            from: ctx.accounts.user_token_account.to_account_info(),
+            to: ctx.accounts.bridge_token_account.to_account_info(),
+            authority: ctx.accounts.owner.to_account_info(),
+        };
 
-        token_account.owner = owner.key();
-        token_account.mint = token_mint.key();
-        token_account.amount = 0;
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            transfer_instruction,
+        );
 
-        msg!("Token account created for {}", owner.key());
+        token::transfer(cpi_ctx, amount)?;
+
+        // Emit deposit event
+        emit!(DepositEvent {
+            user: ctx.accounts.owner.key(),
+            amount,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
         Ok(())
     }
 
-    pub fn mint(ctx: Context<MintTokens>, amount: u64) -> Result<()> {
-        let token_mint = &mut ctx.accounts.token_mint;
-        let token_account = &mut ctx.accounts.token_account;
-        let authority = &ctx.accounts.authority;
+    pub fn burn_for_bridge(
+        ctx: Context<BurnForBridge>,
+        from: Pubkey,
+        destination: String,
+        amount: u64,
+    ) -> Result<()> {
+        // Check if caller is the bridge authority
+        if ctx.accounts.authority.key() != ctx.accounts.bridge.authority {
+            return err!(ErrorCode::UnauthorizedBridgeAuthority);
+        }
 
-        require!(
-            token_mint.authority == authority.key(),
-            TokenError::UnauthorizedMintAuthority
+        // Transfer tokens from bridge to burn account
+        let transfer_instruction = Transfer {
+            from: ctx.accounts.bridge_token_account.to_account_info(),
+            to: ctx.accounts.burn_account.to_account_info(),
+            authority: ctx.accounts.bridge.to_account_info(),
+        };
+
+        let seeds = &[b"flappy_bridge".as_ref(), &[ctx.bumps.bridge]];
+        let signer = &[&seeds[..]];
+
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            transfer_instruction,
+            signer,
         );
 
-        require!(
-            token_account.mint == token_mint.key(),
-            TokenError::InvalidTokenAccount
-        );
+        token::transfer(cpi_ctx, amount)?;
 
-        token_account.amount = token_account.amount.checked_add(amount)
-            .ok_or(TokenError::CalculationOverflow)?;
-            
-        token_mint.total_supply = token_mint.total_supply.checked_add(amount)
-            .ok_or(TokenError::CalculationOverflow)?;
+        // Emit cross-chain transfer event
+        emit!(CrossChainTransferEvent {
+            from,
+            destination,
+            amount,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
 
-        msg!("Minted {} tokens to {}", amount, token_account.owner);
         Ok(())
     }
 
-    pub fn burn(ctx: Context<BurnTokens>, amount: u64) -> Result<()> {
-        let token_mint = &mut ctx.accounts.token_mint;
-        let token_account = &mut ctx.accounts.token_account;
-        let owner = &ctx.accounts.owner;
+    pub fn complete_transfer(
+        ctx: Context<CompleteTransfer>,
+        recipient: Pubkey,
+        amount: u64,
+        source_chain: String,
+        source_tx_hash: String,
+    ) -> Result<()> {
+        // Check if caller is the bridge authority
+        if ctx.accounts.authority.key() != ctx.accounts.bridge.authority {
+            return err!(ErrorCode::UnauthorizedBridgeAuthority);
+        }
 
-        require!(
-            token_account.owner == owner.key(),
-            TokenError::UnauthorizedTokenHolder
+        // Transfer tokens from authority to user
+        let transfer_instruction = Transfer {
+            from: ctx.accounts.authority_token_account.to_account_info(),
+            to: ctx.accounts.user_token_account.to_account_info(),
+            authority: ctx.accounts.authority.to_account_info(),
+        };
+
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            transfer_instruction,
         );
 
-        require!(
-            token_account.mint == token_mint.key(),
-            TokenError::InvalidTokenAccount
-        );
+        token::transfer(cpi_ctx, amount)?;
 
-        require!(
-            token_account.amount >= amount,
-            TokenError::InsufficientFunds
-        );
+        // Emit transfer completion event
+        emit!(TransferCompletedEvent {
+            to: recipient,
+            amount,
+            source_chain,
+            source_tx_hash,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
 
-        token_account.amount = token_account.amount.checked_sub(amount)
-            .ok_or(TokenError::CalculationOverflow)?;
-            
-        token_mint.total_supply = token_mint.total_supply.checked_sub(amount)
-            .ok_or(TokenError::CalculationOverflow)?;
-
-        msg!("Burned {} tokens from {}", amount, token_account.owner);
         Ok(())
     }
 
-    pub fn transfer(ctx: Context<TransferTokens>, amount: u64) -> Result<()> {
-        let from = &mut ctx.accounts.from;
-        let to = &mut ctx.accounts.to;
-        let owner = &ctx.accounts.owner;
+    pub fn emergency_withdraw(ctx: Context<EmergencyWithdraw>, amount: u64) -> Result<()> {
+        // Check if caller is the bridge authority
+        if ctx.accounts.authority.key() != ctx.accounts.bridge.authority {
+            return err!(ErrorCode::UnauthorizedBridgeAuthority);
+        }
 
-        require!(
-            from.owner == owner.key(),
-            TokenError::UnauthorizedTokenHolder
+        // Transfer tokens from bridge to authority
+        let transfer_instruction = Transfer {
+            from: ctx.accounts.bridge_token_account.to_account_info(),
+            to: ctx.accounts.authority_token_account.to_account_info(),
+            authority: ctx.accounts.bridge.to_account_info(),
+        };
+
+        let seeds = &[b"flappy_bridge".as_ref(), &[ctx.bumps.bridge]];
+        let signer = &[&seeds[..]];
+
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            transfer_instruction,
+            signer,
         );
 
-        require!(
-            from.mint == to.mint,
-            TokenError::MintMismatch
-        );
+        token::transfer(cpi_ctx, amount)?;
 
-        require!(
-            from.amount >= amount,
-            TokenError::InsufficientFunds
-        );
+        // Emit emergency withdrawal event
+        emit!(EmergencyWithdrawEvent {
+            amount,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
 
-        from.amount = from.amount.checked_sub(amount)
-            .ok_or(TokenError::CalculationOverflow)?;
-            
-        to.amount = to.amount.checked_add(amount)
-            .ok_or(TokenError::CalculationOverflow)?;
-
-        msg!("Transferred {} tokens from {} to {}", amount, from.owner, to.owner);
         Ok(())
     }
 }
 
+#[derive(Accounts)]
+pub struct InitializeBridge<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 32 + 32, // discriminator + authority + token_mint
+        seeds = [b"flappy_bridge"],
+        bump
+    )]
+    pub bridge: Account<'info, FlappyBridge>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(amount: u64)]
+pub struct Deposit<'info> {
+    #[account(
+        seeds = [b"flappy_bridge"],
+        bump
+    )]
+    pub bridge: Account<'info, FlappyBridge>,
+
+    /// CHECK: This is a token account that must be owned by the owner
+    #[account(mut)]
+    pub user_token_account: AccountInfo<'info>,
+
+    /// CHECK: This is the bridge token account
+    #[account(mut)]
+    pub bridge_token_account: AccountInfo<'info>,
+
+    pub owner: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+#[instruction(from: Pubkey, destination: String, amount: u64)]
+pub struct BurnForBridge<'info> {
+    #[account(
+        seeds = [b"flappy_bridge"],
+        bump,
+    )]
+    pub bridge: Account<'info, FlappyBridge>,
+
+    /// CHECK: This is the bridge token account
+    #[account(mut)]
+    pub bridge_token_account: AccountInfo<'info>,
+
+    /// CHECK: This is the burn token account
+    #[account(mut)]
+    pub burn_account: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+#[instruction(recipient: Pubkey, amount: u64, source_chain: String, source_tx_hash: String)]
+pub struct CompleteTransfer<'info> {
+    #[account(
+        seeds = [b"flappy_bridge"],
+        bump,
+    )]
+    pub bridge: Account<'info, FlappyBridge>,
+
+    #[account(
+        address = bridge.token_mint
+    )]
+    pub mint: Account<'info, Mint>,
+
+    /// CHECK: This is the authority's token account
+    #[account(mut)]
+    pub authority_token_account: AccountInfo<'info>,
+
+    /// CHECK: This is the user's token account
+    #[account(mut)]
+    pub user_token_account: AccountInfo<'info>,
+
+    /// CHECK: This is the recipient of the transfer
+    pub recipient: AccountInfo<'info>,
+
+    #[account(
+        mut,
+        constraint = authority.key() == bridge.authority
+    )]
+    pub authority: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(amount: u64)]
+pub struct EmergencyWithdraw<'info> {
+    #[account(
+        seeds = [b"flappy_bridge"],
+        bump,
+    )]
+    pub bridge: Account<'info, FlappyBridge>,
+
+    /// CHECK: This is the bridge token account
+    #[account(mut)]
+    pub bridge_token_account: AccountInfo<'info>,
+
+    /// CHECK: This is the authority's token account
+    #[account(mut)]
+    pub authority_token_account: AccountInfo<'info>,
+
+    #[account(
+        mut,
+        constraint = authority.key() == bridge.authority
+    )]
+    pub authority: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+
 #[account]
-pub struct TokenMint {
-    pub name: String,
-    pub symbol: String,
-    pub decimals: u8,
+pub struct FlappyBridge {
     pub authority: Pubkey,
-    pub total_supply: u64,
-}
-
-#[account]
-pub struct TokenAccount {
-    pub owner: Pubkey,
-    pub mint: Pubkey,
-    pub amount: u64,
-}
-
-#[derive(Accounts)]
-pub struct Initialize<'info> {
-    #[account(init, payer = authority, space = 8 + 32 + 16 + 1 + 32 + 8)]
-    pub token_mint: Account<'info, TokenMint>,
-    
-    #[account(mut)]
-    pub authority: Signer<'info>,
-    
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct CreateAccount<'info> {
-    pub token_mint: Account<'info, TokenMint>,
-    
-    #[account(init, payer = owner, space = 8 + 32 + 32 + 8)]
-    pub token_account: Account<'info, TokenAccount>,
-    
-    #[account(mut)]
-    pub owner: Signer<'info>,
-    
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct MintTokens<'info> {
-    #[account(mut)]
-    pub token_mint: Account<'info, TokenMint>,
-    
-    #[account(mut)]
-    pub token_account: Account<'info, TokenAccount>,
-    
-    pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct BurnTokens<'info> {
-    #[account(mut)]
-    pub token_mint: Account<'info, TokenMint>,
-    
-    #[account(mut)]
-    pub token_account: Account<'info, TokenAccount>,
-    
-    pub owner: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct TransferTokens<'info> {
-    #[account(mut)]
-    pub from: Account<'info, TokenAccount>,
-    
-    #[account(mut)]
-    pub to: Account<'info, TokenAccount>,
-    
-    pub owner: Signer<'info>,
+    pub token_mint: Pubkey,
 }
 
 #[error_code]
-pub enum TokenError {
-    #[msg("Mint authority is invalid")]
-    UnauthorizedMintAuthority,
-    
-    #[msg("Token holder is not authorized")]
-    UnauthorizedTokenHolder,
-    
-    #[msg("Insufficient funds")]
-    InsufficientFunds,
-    
-    #[msg("Calculation overflow")]
-    CalculationOverflow,
+pub enum ErrorCode {
+    #[msg("Caller is not authorized to perform this action")]
+    UnauthorizedBridgeAuthority,
+}
 
-    #[msg("Invalid token account")]
-    InvalidTokenAccount,
+// Events
+#[event]
+pub struct DepositEvent {
+    pub user: Pubkey,
+    pub amount: u64,
+    pub timestamp: i64,
+}
 
-    #[msg("Mint mismatch between accounts")]
-    MintMismatch,
+#[event]
+pub struct CrossChainTransferEvent {
+    pub from: Pubkey,
+    pub destination: String,
+    pub amount: u64,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct TransferCompletedEvent {
+    pub to: Pubkey,
+    pub amount: u64,
+    pub source_chain: String,
+    pub source_tx_hash: String,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct EmergencyWithdrawEvent {
+    pub amount: u64,
+    pub timestamp: i64,
 }

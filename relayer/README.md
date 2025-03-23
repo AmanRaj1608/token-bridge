@@ -1,6 +1,6 @@
 # Token Bridge Relayer
 
-This service monitors a token contract on Ethereum Sepolia for burn events and mints equivalent tokens on Solana.
+This relayer service facilitates cross-chain token transfers between Solana (SVM) and Ethereum (EVM) networks.
 
 ```sh
                   ┌────────────────┐                  ┌────────────────┐
@@ -15,27 +15,27 @@ This service monitors a token contract on Ethereum Sepolia for burn events and m
 │  │   ETH Burn      │  │   SOL Mint      │   │  │   SOL Burn      │  │   ETH Mint      │   │
 │  │   Listener      │  │   Confirmer     │   │  │   Listener      │  │   Confirmer     │   │
 │  └────────┬────────┘  └────────┬────────┘   │  └────────┬────────┘  └────────┬────────┘   │
-└───────────┼─────────────────────┼───────────┘          │                     │           
-            │                     │                       │                     │           
-            ▼                     ▼                       ▼                     ▼           
-     ┌─────────────────────────────────────────────────────────────────────────────────┐     
-     │                                  MongoDB                                        │     
-     │  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐               │     
-     │  │ Pending         │   │ Processing      │   │ Completed       │               │     
-     │  │ Transfers       │   │ Transfers       │   │ Transfers       │               │     
-     │  └─────────────────┘   └─────────────────┘   └─────────────────┘               │     
-     └────────────────────────────────┬────────────────────────────────────────────────┘     
-                                      │                                                
-                                      ▼                                                
-                       ┌─────────────────────────────────┐                            
-                       │     Processing Pipeline         │                            
-                       │  ┌─────────────────────────┐   │                            
-                       │  │ ETH → SOL Processor     │   │                            
-                       │  └─────────────────────────┘   │                            
-                       │  ┌─────────────────────────┐   │                            
-                       │  │ SOL → ETH Processor     │   │                            
-                       │  └─────────────────────────┘   │                            
-                       └─────────────────────────────────┘                            
+└───────────┼─────────────────────┼───────────┘          │                     │
+            │                     │                       │                     │
+            ▼                     ▼                       ▼                     ▼
+     ┌─────────────────────────────────────────────────────────────────────────────────┐
+     │                                  MongoDB                                        │
+     │  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐               │
+     │  │ Pending         │   │ Processing      │   │ Completed       │               │
+     │  │ Transfers       │   │ Transfers       │   │ Transfers       │               │
+     │  └─────────────────┘   └─────────────────┘   └─────────────────┘               │
+     └────────────────────────────────┬────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+                       ┌─────────────────────────────────┐
+                       │     Processing Pipeline         │
+                       │  ┌─────────────────────────┐   │
+                       │  │ ETH → SOL Processor     │   │
+                       │  └─────────────────────────┘   │
+                       │  ┌─────────────────────────┐   │
+                       │  │ SOL → ETH Processor     │   │
+                       │  └─────────────────────────┘   │
+                       └─────────────────────────────────┘
 ```
 
 ### Features
@@ -46,8 +46,7 @@ This service monitors a token contract on Ethereum Sepolia for burn events and m
 - Automatically retries failed transactions
 - Provides health endpoint and graceful shutdown
 
-For production, use:
-
+Use:
 ```sh
 yarn build
 yarn start

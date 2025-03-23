@@ -4,7 +4,9 @@
   "main": "src/app.ts",
   "scripts": {
     "start": "ts-node src/app.ts",
-    "dev": "ts-node-dev --respawn --transpile-only src/app.ts"
+    "dev": "ts-node-dev --respawn --transpile-only src/app.ts",
+    "solana:deposit-burn": "ts-node src/scripts/deposit-and-burn-solana.ts",
+    "evm:deposit-burn": "ts-node src/scripts/deposit-and-burn-evm.ts"
   },
   "keywords": [],
   "author": "",
@@ -12,7 +14,10 @@
   "description": "",
   "dependencies": {
     "@solana/web3.js": "^1.87.6",
+    "bn.js": "^5.2.1",
+    "borsh": "^2.0.0",
     "bs58": "^5.0.0",
+    "commander": "^11.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -26,6 +31,7 @@
     "viem": "^2.23.13"
   },
   "devDependencies": {
+    "@types/bn.js": "^5.1.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.1"
   }
